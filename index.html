@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Field Journal</title>
+<meta name="description" content="A personal daily journal with streaks, weekly review, and your own Google Drive backup." />
+<meta name="theme-color" content="#14315B" />
+<link rel="manifest" href="./manifest.json" />
+<link rel="icon" href="./icon-192.png" />
+<link rel="apple-touch-icon" href="./icon-192.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Journal" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet" />
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<style>
+  :root {
+    --ground: #14315B;
+    --line: #6FA8D8;
+    --cyan: #8ECBE6;
+    --paper: #F4F1E8;
+    --ink: #1E2A38;
+    --red: #B34B3C;
+    --mono: 'IBM Plex Mono', ui-monospace, monospace;
+    --serif: 'Source Serif 4', Georgia, serif;
+    --sans: 'IBM Plex Sans', ui-sans-serif, system-ui;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--ground);
+    background-image:
+      linear-gradient(rgba(111,168,216,0.13) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(111,168,216,0.13) 1px, transparent 1px);
+    background-size: 32px 32px;
+    font-family: var(--sans);
+    min-height: 100vh;
+    min-height: 100dvh;
+    color: var(--paper);
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 28px 16px 60px; }
+  @media (min-width: 640px) { .wrap { padding: 48px 24px 80px; } }
+
+  header.appheader { padding-bottom: 16px; margin-bottom: 20px; border-bottom: 1px solid rgba(111,168,216,0.35); }
+  .titlerow { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px; }
+  .eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan); margin-bottom: 4px; }
+  h1 { font-family: var(--serif); font-size: 28px; margin: 0; font-weight: 500; color: var(--paper); }
+  .stats { display: flex; align-items: center; gap: 18px; }
+  .stat { text-align: right; background: none; border: none; padding: 0; cursor: pointer; font: inherit; color: inherit; }
+  .stat .label { font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(244,241,232,0.55); }
+  .stat .value { font-family: var(--mono); display: flex; align-items: center; gap: 5px; justify-content: flex-end; margin-top: 2px; font-size: 14px; }
+
+  nav.tabs { display: flex; gap: 4px; margin-top: 18px; flex-wrap: wrap; }
+  .tab { font-family: var(--mono); font-size: 13px; padding: 8px 12px; background: transparent; color: rgba(244,241,232,0.65); border: 1px solid transparent; border-radius: 3px 3px 0 0; cursor: pointer; }
+  .tab.active { background: var(--paper); color: var(--ink); border-color: var(--line); }
+
+  .panel { position: relative; background: var(--paper); padding: 24px 20px; box-shadow: 0 12px 30px rgba(0,0,0,0.28); border-radius: 2px; }
+  @media (min-width: 640px) { .panel { padding: 32px; } }
+  .panel-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 20px; gap: 12px; flex-wrap: wrap; }
+  .meta-label { font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(30,42,56,0.6); }
+
+  .field-block { margin-bottom: 20px; }
+  .field-label { font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(30,42,56,0.6); margin-bottom: 8px; }
+  textarea.field {
+    width: 100%; resize: none; background: transparent; border: none; outline: none;
+    font-family: var(--serif); color: var(--ink); font-size: 16px; padding: 2px 2px;
+    background-image: linear-gradient(rgba(30,42,56,0.13) 1px, transparent 1px);
+    background-size: 100% 1.7em; line-height: 1.7em; caret-color: var(--red);
+  }
+  textarea.field::placeholder { font-style: italic; color: rgba(30,42,56,0.4); }
+
+  .btn { font-family: var(--mono); font-size: 13px; border: none; border-radius: 999px; padding: 10px 18px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; }
+  .btn-primary { background: var(--ink); color: var(--paper); }
+  .btn-primary:disabled { opacity: 0.45; cursor: default; }
+  .btn-ghost { background: none; color: rgba(30,42,56,0.55); padding: 4px 0; }
+  .btn-ghost.danger { color: var(--red); text-decoration: underline; }
+
+  .banner { padding: 10px 14px; border-radius: 2px; font-size: 14px; margin-bottom: 16px; }
+  .banner.info { background: rgba(111,168,216,0.18); color: var(--ink); }
+  .banner.error { background: rgba(179,75,60,0.15); color: var(--paper); border: 1px solid var(--red); }
+
+  .entry-row { padding: 12px 0; border-bottom: 1px solid rgba(30,42,56,0.12); }
+  .entry-row:last-child { border-bottom: none; }
+  .entry-row-btn { width: 100%; display: flex; align-items: center; gap: 12px; background: none; border: none; text-align: left; cursor: pointer; padding: 0; font: inherit; color: inherit; }
+  .entry-num { font-family: var(--mono); font-size: 12px; color: rgba(30,42,56,0.55); flex-shrink: 0; }
+  .entry-date { font-family: var(--mono); font-size: 12px; color: rgba(30,42,56,0.55); flex-shrink: 0; width: 88px; white-space: nowrap; }
+  .entry-snippet { flex: 1; font-family: var(--serif); font-size: 15px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .entry-detail { margin-top: 12px; padding-left: 0; font-family: var(--serif); color: var(--ink); font-size: 15px; }
+  @media (min-width: 640px) { .entry-detail { padding-left: 96px; } }
+  .entry-detail .sec { margin-bottom: 12px; }
+  .entry-detail .sec .field-label { margin-bottom: 4px; }
+
+  .stamp { display: inline-flex; align-items: center; gap: 4px; border: 2px solid var(--red); color: var(--red); border-radius: 999px; padding: 2px 8px; font-family: var(--mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; transform: rotate(-6deg); flex-shrink: 0; }
+
+  .icon { width: 14px; height: 14px; display: inline-block; vertical-align: -2px; }
+  .spinner { animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+  .empty { text-align: center; padding: 40px 10px; font-family: var(--serif); color: rgba(30,42,56,0.75); }
+
+  label.checkrow { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); cursor: pointer; }
+  input[type="text"].textinput {
+    width: 100%; padding: 10px 12px; border: 1px solid rgba(30,42,56,0.25); border-radius: 3px;
+    font-family: var(--mono); font-size: 14px; color: var(--ink); background: #fff;
+  }
+  .settings-section { margin-bottom: 26px; }
+  .settings-section h3 { font-family: var(--serif); font-size: 16px; margin: 0 0 8px; color: var(--ink); font-weight: 600; }
+  .settings-section p.help { font-size: 13px; color: rgba(30,42,56,0.65); margin: 6px 0 12px; line-height: 1.5; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+
+  a.link { color: var(--ink); text-decoration: underline; }
+
+  :focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script>
+/* ---------------- Storage keys ---------------- */
+var LS_DATA = 'fieldJournal.data.v1';
+var LS_CLIENT_ID = 'fieldJournal.googleClientId';
+var LS_DRIVE_JSON_ID = 'fieldJournal.driveFileId.json';
+var LS_DRIVE_MD_ID = 'fieldJournal.driveFileId.md';
+var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+
+/* ---------------- App state ---------------- */
+var state = {
+  view: 'today',
+  entries: [],
+  meta: { nextEntryNumber: 1, lastReviewAt: null },
+  expandedId: null,
+  confirmClear: false,
+  saving: false,
+  justSaved: false,
+  form: { happened: '', did: '', change: '', freeform: '' },
+  drive: { status: 'idle', message: '' }, // idle | syncing | success | error | needs-setup
+  settingsClientIdDraft: null
+};
+
+/* ---------------- Date helpers ---------------- */
+function localISODate(date) {
+  date = date || new Date();
+  var y = date.getFullYear();
+  var m = String(date.getMonth() + 1).padStart(2, '0');
+  var d = String(date.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + d;
+}
+function formatDisplayDate(iso) {
+  var parts = iso.split('-').map(Number);
+  var dt = new Date(parts[0], parts[1] - 1, parts[2]);
+  return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function computeStreak(entries) {
+  var dates = {};
+  entries.forEach(function (e) { dates[e.date] = true; });
+  var d = new Date();
+  if (!dates[localISODate(d)]) d.setDate(d.getDate() - 1);
+  var streak = 0;
+  while (dates[localISODate(d)]) {
+    streak++;
+    d.setDate(d.getDate() - 1);
+  }
+  return streak;
+}
+
+/* ---------------- HTML escaping ---------------- */
+function escapeHtml(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function textToHtml(str) {
+  return escapeHtml(str).replace(/\n/g, '<br>');
+}
+
+/* ---------------- Local persistence ---------------- */
+function loadData() {
+  try {
+    var raw = localStorage.getItem(LS_DATA);
+    if (raw) {
+      var parsed = JSON.parse(raw);
+      state.entries = parsed.entries || [];
+      state.meta = parsed.meta || { nextEntryNumber: 1, lastReviewAt: null };
+    }
+  } catch (e) { /* start fresh on corrupt data */ }
+}
+function saveData() {
+  try {
+    localStorage.setItem(LS_DATA, JSON.stringify({ entries: state.entries, meta: state.meta }));
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+/* ---------------- Markdown export ---------------- */
+function buildMarkdownExport(entries) {
+  var lines = ['# Field Journal', '', '_Backed up ' + new Date().toLocaleString('en-GB') + ' \u00b7 ' + entries.length + ' ' + (entries.length === 1 ? 'entry' : 'entries') + '_', ''];
+  entries.forEach(function (e) {
+    lines.push('## Entry ' + String(e.number).padStart(3, '0') + ' \u2014 ' + formatDisplayDate(e.date));
+    if (e.happened) lines.push('', '**What happened**', e.happened);
+    if (e.did) lines.push('', '**What I did**', e.did);
+    if (e.change) lines.push('', "**What I'd do differently**", e.change);
+    if (e.freeform) lines.push('', '**Notes**', e.freeform);
+    lines.push('');
+  });
+  return lines.join('\n');
+}
+
+/* ---------------- Google Drive sync (client-side, your own OAuth) ---------------- */
+var tokenClient = null;
+var tokenClientId = null;
+var accessToken = null;
+var tokenExpiresAt = 0;
+
+function getClientId() {
+  return (localStorage.getItem(LS_CLIENT_ID) || '').trim();
+}
+
+function ensureTokenClient() {
+  var clientId = getClientId();
+  if (!clientId) return false;
+  if (typeof google === 'undefined' || !google.accounts) return false;
+  if (!tokenClient || tokenClientId !== clientId) {
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: DRIVE_SCOPE,
+      callback: function () {}
+    });
+    tokenClientId = clientId;
+    accessToken = null;
+  }
+  return true;
+}
+
+function requestToken(interactive) {
+  return new Promise(function (resolve, reject) {
+    if (!ensureTokenClient()) { reject(new Error('no-client-id')); return; }
+    if (accessToken && Date.now() < tokenExpiresAt - 30000) { resolve(accessToken); return; }
+    tokenClient.callback = function (resp) {
+      if (resp.error) { reject(new Error(resp.error)); return; }
+      accessToken = resp.access_token;
+      tokenExpiresAt = Date.now() + (resp.expires_in || 3600) * 1000;
+      resolve(accessToken);
+    };
+    try {
+      tokenClient.requestAccessToken({ prompt: interactive ? 'consent' : '' });
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+function driveFetch(url, options, interactive) {
+  options = options || {};
+  return requestToken(interactive).then(function (token) {
+    var headers = Object.assign({}, options.headers, { Authorization: 'Bearer ' + token });
+    return fetch(url, Object.assign({}, options, { headers: headers })).then(function (res) {
+      if (res.status === 401 && accessToken) {
+        accessToken = null;
+        return requestToken(true).then(function (token2) {
+          var headers2 = Object.assign({}, options.headers, { Authorization: 'Bearer ' + token2 });
+          return fetch(url, Object.assign({}, options, { headers: headers2 }));
+        });
+      }
+      return res;
+    });
+  });
+}
+
+function driveFindFile(name) {
+  var q = encodeURIComponent("name='" + name.replace(/'/g, "\\'") + "' and trashed=false");
+  return driveFetch('https://www.googleapis.com/drive/v3/files?q=' + q + '&spaces=drive&fields=files(id,name)', {}, true)
+    .then(function (res) {
+      if (!res.ok) throw new Error('search-failed');
+      return res.json();
+    })
+    .then(function (data) { return (data.files && data.files[0]) || null; });
+}
+
+function driveUpsertFile(name, mimeType, content, cachedIdKey, interactive) {
+  var fileId = cachedIdKey ? localStorage.getItem(cachedIdKey) : null;
+  var findStep = fileId ? Promise.resolve(fileId) : driveFindFile(name).then(function (f) { return f ? f.id : null; });
+
+  return findStep.then(function (foundId) {
+    if (foundId) {
+      return driveFetch('https://www.googleapis.com/upload/drive/v3/files/' + foundId + '?uploadType=media', {
+        method: 'PATCH',
+        headers: { 'Content-Type': mimeType },
+        body: content
+      }, interactive).then(function (res) {
+        if (res.ok) {
+          if (cachedIdKey) localStorage.setItem(cachedIdKey, foundId);
+          return foundId;
+        }
+        return createFile();
+      });
+    }
+    return createFile();
+  });
+
+  function createFile() {
+    var boundary = 'fjbound' + Date.now();
+    var metadata = JSON.stringify({ name: name, mimeType: mimeType });
+    var body =
+      '--' + boundary + '\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n' + metadata + '\r\n' +
+      '--' + boundary + '\r\nContent-Type: ' + mimeType + '\r\n\r\n' + content + '\r\n' +
+      '--' + boundary + '--';
+    return driveFetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'multipart/related; boundary=' + boundary },
+      body: body
+    }, interactive).then(function (res) {
+      if (!res.ok) throw new Error('create-failed');
+      return res.json();
+    }).then(function (data) {
+      if (cachedIdKey) localStorage.setItem(cachedIdKey, data.id);
+      return data.id;
+    });
+  }
+}
+
+function driveDownloadFile(fileId, interactive) {
+  return driveFetch('https://www.googleapis.com/drive/v3/files/' + fileId + '?alt=media', {}, interactive)
+    .then(function (res) {
+      if (!res.ok) throw new Error('download-failed');
+      return res.text();
+    });
+}
+
+function backupToDrive(interactive) {
+  if (!getClientId()) {
+    state.drive = { status: 'needs-setup', message: '' };
+    render();
+    return;
+  }
+  state.drive = { status: 'syncing', message: '' };
+  render();
+  var jsonContent = JSON.stringify({ entries: state.entries, meta: state.meta }, null, 2);
+  var mdContent = buildMarkdownExport(state.entries);
+  driveUpsertFile('journal-data.json', 'application/json', jsonContent, LS_DRIVE_JSON_ID, interactive)
+    .then(function () {
+      return driveUpsertFile('Field Journal.md', 'text/markdown', mdContent, LS_DRIVE_MD_ID, interactive);
+    })
+    .then(function () {
+      state.drive = { status: 'success', message: 'Backed up to Drive.' };
+      render();
+    })
+    .catch(function (err) {
+      var silentSkip = !interactive && (err.message === 'no-client-id' || err.message === 'popup_closed' || err.message === 'access_denied' || err.message === 'interaction_required');
+      state.drive = silentSkip
+        ? { status: 'idle', message: '' }
+        : { status: 'error', message: "Couldn't reach Drive \u2014 tap to try again." };
+      render();
+    });
+}
+
+function restoreFromDrive() {
+  if (!getClientId()) {
+    state.drive = { status: 'needs-setup', message: '' };
+    render();
+    return;
+  }
+  state.drive = { status: 'syncing', message: '' };
+  render();
+  var cachedId = localStorage.getItem(LS_DRIVE_JSON_ID);
+  var idStep = cachedId ? Promise.resolve(cachedId) : driveFindFile('journal-data.json').then(function (f) {
+    if (!f) throw new Error('not-found');
+    localStorage.setItem(LS_DRIVE_JSON_ID, f.id);
+    return f.id;
+  });
+  idStep.then(function (fileId) {
+    return driveDownloadFile(fileId, true);
+  }).then(function (text) {
+    var parsed = JSON.parse(text);
+    state.entries = parsed.entries || [];
+    state.meta = parsed.meta || { nextEntryNumber: 1, lastReviewAt: null };
+    saveData();
+    state.drive = { status: 'success', message: 'Restored from Drive.' };
+    render();
+  }).catch(function (err) {
+    state.drive = { status: 'error', message: err.message === 'not-found' ? 'No backup found in Drive yet.' : "Couldn't restore \u2014 try again." };
+    render();
+  });
+}
+
+/* ---------------- Local backup file (works with no setup) ---------------- */
+function downloadLocalBackup() {
+  var content = JSON.stringify({ entries: state.entries, meta: state.meta }, null, 2);
+  var blob = new Blob([content], { type: 'application/json' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'field-journal-backup-' + localISODate() + '.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/* ---------------- Actions ---------------- */
+function captureFormFromDom() {
+  ['happened', 'did', 'change', 'freeform'].forEach(function (key) {
+    var el = document.getElementById('field-' + key);
+    if (el) state.form[key] = el.value;
+  });
+}
+
+function setView(view) {
+  if (state.view === 'today') captureFormFromDom();
+  state.view = view;
+  state.expandedId = null;
+  render();
+}
+
+function toggleExpand(id) {
+  state.expandedId = state.expandedId === id ? null : id;
+  render();
+}
+
+function saveEntry() {
+  captureFormFromDom();
+  var f = state.form;
+  if (!f.happened.trim() && !f.did.trim() && !f.change.trim() && !f.freeform.trim()) return;
+  var today = localISODate();
+  var entry = {
+    id: String(Date.now()),
+    number: state.meta.nextEntryNumber,
+    date: today,
+    createdAt: new Date().toISOString(),
+    happened: f.happened.trim(),
+    did: f.did.trim(),
+    change: f.change.trim(),
+    freeform: f.freeform.trim(),
+    reviewed: false
+  };
+  state.entries = [entry].concat(state.entries);
+  state.meta = Object.assign({}, state.meta, { nextEntryNumber: state.meta.nextEntryNumber + 1 });
+  var ok = saveData();
+  state.form = { happened: '', did: '', change: '', freeform: '' };
+  state.justSaved = true;
+  render();
+  setTimeout(function () { state.justSaved = false; render(); }, 2200);
+  if (!ok) {
+    state.drive = { status: 'error', message: 'Local storage is full or unavailable \u2014 back up manually.' };
+  } else {
+    backupToDrive(false); // silent best-effort; won't pop a login window on its own
+  }
+}
+
+function markReviewed() {
+  var unreviewedIds = {};
+  state.entries.forEach(function (e) { if (!e.reviewed) unreviewedIds[e.id] = true; });
+  state.entries = state.entries.map(function (e) { return unreviewedIds[e.id] ? Object.assign({}, e, { reviewed: true }) : e; });
+  state.meta = Object.assign({}, state.meta, { lastReviewAt: new Date().toISOString() });
+  saveData();
+  render();
+}
+
+function requestClear() { state.confirmClear = true; render(); }
+function cancelClear() { state.confirmClear = false; render(); }
+function clearAll() {
+  state.entries = [];
+  state.meta = { nextEntryNumber: 1, lastReviewAt: null };
+  saveData();
+  state.confirmClear = false;
+  render();
+}
+
+function saveClientId() {
+  var el = document.getElementById('client-id-input');
+  var value = el ? el.value.trim() : '';
+  localStorage.setItem(LS_CLIENT_ID, value);
+  tokenClient = null;
+  tokenClientId = null;
+  accessToken = null;
+  state.drive = { status: 'idle', message: value ? 'Saved. Tap "Connect & back up" to sign in.' : '' };
+  render();
+}
+
+/* ---------------- Rendering ---------------- */
+function iconFlame() {
+  return '<svg class="icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c1 3-2 4-2 7a4 4 0 0 0 8 0c2 2 2 5 0 8a7 7 0 0 1-12 -5c0-4 3-6 6-10z"/></svg>';
+}
+function iconCloud() {
+  return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 18a4 4 0 1 1 .8-7.93A5.5 5.5 0 0 1 18 12a3.5 3.5 0 0 1-.5 6.9"/><path d="M7 18h10"/></svg>';
+}
+function iconAlert() {
+  return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="13"/><line x1="12" y1="16" x2="12" y2="16.01"/></svg>';
+}
+function iconSpinner() {
+  return '<svg class="icon spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-9-9" stroke-linecap="round"/></svg>';
+}
+function iconCheck() {
+  return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="4 12 9 17 20 6"/></svg>';
+}
+function iconChevron(down) {
+  return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' + (down ? '<polyline points="6 9 12 15 18 9"/>' : '<polyline points="18 15 12 9 6 15"/>') + '</svg>';
+}
+function iconPen() {
+  return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+}
+
+function driveStatIcon() {
+  if (state.drive.status === 'syncing') return iconSpinner();
+  if (state.drive.status === 'error') return iconAlert();
+  return iconCloud();
+}
+function driveStatLabel() {
+  switch (state.drive.status) {
+    case 'syncing': return 'Syncing';
+    case 'success': return 'Synced';
+    case 'error': return 'Retry';
+    case 'needs-setup': return 'Set up';
+    default: return getClientId() ? 'Backup' : 'Set up';
+  }
+}
+function driveStatColor() {
+  if (state.drive.status === 'error') return 'var(--red)';
+  if (state.drive.status === 'success') return 'var(--cyan)';
+  return 'rgba(244,241,232,0.65)';
+}
+
+function renderHeader() {
+  var streak = computeStreak(state.entries);
+  var tabs = [
+    ['today', 'Today'],
+    ['log', 'Log'],
+    ['review', 'Review' + (unreviewedCount() ? ' (' + unreviewedCount() + ')' : '')],
+    ['settings', 'Settings']
+  ];
+  var tabsHtml = tabs.map(function (t) {
+    return '<button class="tab' + (state.view === t[0] ? ' active' : '') + '" onclick="setView(\'' + t[0] + '\')">' + t[1] + '</button>';
+  }).join('');
+
+  return '' +
+  '<header class="appheader">' +
+    '<div class="titlerow">' +
+      '<div><div class="eyebrow">Field Log</div><h1>Journal</h1></div>' +
+      '<div class="stats">' +
+        '<div class="stat"><div class="label">Streak</div><div class="value" style="color:' + (streak > 0 ? 'var(--red)' : 'rgba(244,241,232,0.4)') + '">' + iconFlame() + '<span>' + streak + 'd</span></div></div>' +
+        '<div class="stat"><div class="label">Entry No.</div><div class="value" style="color:var(--paper)">' + String(state.meta.nextEntryNumber).padStart(3, '0') + '</div></div>' +
+        '<button class="stat" onclick="onDriveStatClick()" title="' + escapeHtml(state.drive.message || 'Back up your entries to your Google Drive') + '">' +
+          '<div class="label">Drive</div><div class="value" style="color:' + driveStatColor() + '">' + driveStatIcon() + '<span>' + driveStatLabel() + '</span></div>' +
+        '</button>' +
+      '</div>' +
+    '</div>' +
+    '<nav class="tabs">' + tabsHtml + '</nav>' +
+  '</header>';
+}
+
+function onDriveStatClick() {
+  if (!getClientId()) { setView('settings'); return; }
+  backupToDrive(true);
+}
+
+function unreviewedCount() {
+  return state.entries.filter(function (e) { return !e.reviewed; }).length;
+}
+
+function renderToday() {
+  var today = localISODate();
+  var hasToday = state.entries.some(function (e) { return e.date === today; });
+  var f = state.form;
+  var canSave = f.happened.trim() || f.did.trim() || f.change.trim() || f.freeform.trim();
+  return '' +
+  '<div class="panel">' +
+    '<div class="panel-head"><span class="meta-label">Entry No. ' + String(state.meta.nextEntryNumber).padStart(3, '0') + '</span><span class="meta-label">' + formatDisplayDate(today) + '</span></div>' +
+    (hasToday ? '<div class="banner info">You\u2019ve already logged today \u2014 this will add a second entry.</div>' : '') +
+    field('happened', 'What happened', 'The site visit, the meeting, the thing that took the day sideways\u2026', f.happened, 3) +
+    field('did', 'What I did', 'How you actually responded\u2026', f.did, 3) +
+    field('change', "What I'd do differently", 'The one adjustment for next time\u2026', f.change, 3) +
+    field('freeform', 'Anything else (optional)', "Free write, if something doesn't fit the boxes above\u2026", f.freeform, 2) +
+    '<div class="row" style="justify-content:flex-end;margin-top:8px;">' +
+      '<button class="btn btn-primary" id="save-entry-btn" ' + (state.saving || !canSave ? 'disabled' : '') + ' onclick="saveEntry()">' + iconPen() + '<span>' + (state.justSaved ? 'Saved' : 'Save entry') + '</span></button>' +
+    '</div>' +
+  '</div>';
+}
+
+function field(key, label, placeholder, value, rows) {
+  return '' +
+  '<div class="field-block">' +
+    '<div class="field-label">' + label + '</div>' +
+    '<textarea class="field" id="field-' + key + '" rows="' + rows + '" placeholder="' + escapeHtml(placeholder) + '" oninput="updateSaveButtonState()">' + escapeHtml(value) + '</textarea>' +
+  '</div>';
+}
+
+// Enabling/disabling Save is done as a direct DOM tweak (not a full render()) so typing
+// never loses cursor focus \u2014 render() only runs on save, tab switches, and similar.
+function updateSaveButtonState() {
+  var btn = document.getElementById('save-entry-btn');
+  if (!btn) return;
+  var keys = ['happened', 'did', 'change', 'freeform'];
+  var canSave = keys.some(function (key) {
+    var el = document.getElementById('field-' + key);
+    return el && el.value.trim();
+  });
+  btn.disabled = !canSave;
+}
+
+function renderLog() {
+  var body;
+  if (state.entries.length === 0) {
+    body = '<div class="empty">No entries yet \u2014 your first one starts the log.<div style="margin-top:16px;"><button class="btn btn-primary" onclick="setView(\'today\')">Write today\'s entry</button></div></div>';
+  } else {
+    body = state.entries.map(function (e) {
+      var expanded = state.expandedId === e.id;
+      var snippet = e.happened || e.did || e.change || e.freeform || '(untitled entry)';
+      var detail = '';
+      if (expanded) {
+        detail = '<div class="entry-detail">' +
+          (e.happened ? '<div class="sec"><div class="field-label">What happened</div>' + textToHtml(e.happened) + '</div>' : '') +
+          (e.did ? '<div class="sec"><div class="field-label">What I did</div>' + textToHtml(e.did) + '</div>' : '') +
+          (e.change ? '<div class="sec"><div class="field-label">What I\'d do differently</div>' + textToHtml(e.change) + '</div>' : '') +
+          (e.freeform ? '<div class="sec"><div class="field-label">Notes</div>' + textToHtml(e.freeform) + '</div>' : '') +
+          '</div>';
+      }
+      return '<div class="entry-row">' +
+        '<button class="entry-row-btn" onclick="toggleExpand(\'' + e.id + '\')">' +
+          '<span class="entry-num">\u2116' + String(e.number).padStart(3, '0') + '</span>' +
+          '<span class="entry-date">' + formatDisplayDate(e.date) + '</span>' +
+          '<span class="entry-snippet">' + escapeHtml(snippet) + '</span>' +
+          (e.reviewed ? '<span class="stamp">' + iconCheck() + '<span>Reviewed</span></span>' : '') +
+          iconChevron(!expanded) +
+        '</button>' + detail +
+      '</div>';
+    }).join('');
+  }
+
+  return '' +
+  '<div class="panel">' +
+    '<div class="panel-head"><span class="meta-label">Revision Log</span><span class="meta-label">' + state.entries.length + ' ' + (state.entries.length === 1 ? 'entry' : 'entries') + '</span></div>' +
+    body +
+  '</div>';
+}
+
+function renderReview() {
+  var pending = state.entries.filter(function (e) { return !e.reviewed; });
+  var body;
+  if (pending.length === 0) {
+    body = '<p style="font-family:var(--serif);color:rgba(30,42,56,0.8);font-size:15px;">Nothing pending. Come back after a few more entries and look for what repeats \u2014 the same frustration, the same mistake, the same task avoided.</p>';
+  } else {
+    var rows = pending.map(function (e) {
+      return '<div style="padding-bottom:16px;border-bottom:1px solid rgba(30,42,56,0.1);margin-bottom:16px;">' +
+        '<div class="meta-label" style="margin-bottom:4px;">\u2116' + String(e.number).padStart(3, '0') + ' \u00b7 ' + formatDisplayDate(e.date) + '</div>' +
+        (e.happened ? '<p style="font-family:var(--serif);color:var(--ink);font-size:15px;margin:0 0 4px;">' + textToHtml(e.happened) + '</p>' : '') +
+        (e.change ? '<p style="font-family:var(--serif);color:rgba(30,42,56,0.8);font-style:italic;font-size:14px;margin:0;">\u2192 ' + textToHtml(e.change) + '</p>' : '') +
+      '</div>';
+    }).join('');
+    body = rows + '<button class="btn btn-primary" onclick="markReviewed()">' + iconCheck() + '<span>Mark reviewed</span></button>';
+  }
+  return '' +
+  '<div class="panel">' +
+    '<div class="meta-label" style="margin-bottom:6px;">Since your last review</div>' +
+    '<h2 style="font-family:var(--serif);font-weight:500;font-size:19px;color:var(--ink);margin:0 0 18px;">' + (pending.length === 0 ? 'You\u2019re all caught up.' : pending.length + ' ' + (pending.length === 1 ? 'entry' : 'entries') + ' waiting') + '</h2>' +
+    body +
+  '</div>';
+}
+
+function renderSettings() {
+  var clientId = getClientId();
+  var draft = state.settingsClientIdDraft !== null ? state.settingsClientIdDraft : clientId;
+  return '' +
+  '<div class="panel">' +
+    '<div class="settings-section">' +
+      '<h3>Google Drive backup</h3>' +
+      '<p class="help">Paste the OAuth Client ID from your own Google Cloud project (see the README that came with this app for the one-time setup). Nothing is sent anywhere else \u2014 the app talks to Google directly from your phone.</p>' +
+      '<input type="text" class="textinput" id="client-id-input" placeholder="xxxxxxxxxx.apps.googleusercontent.com" value="' + escapeHtml(draft) + '" />' +
+      '<div class="row" style="margin-top:10px;">' +
+        '<button class="btn btn-primary" onclick="saveClientId()">Save Client ID</button>' +
+        '<button class="btn" style="background:transparent;border:1px solid rgba(30,42,56,0.3);color:var(--ink);" onclick="backupToDrive(true)">' + (state.drive.status === 'syncing' ? 'Working\u2026' : 'Connect &amp; back up now') + '</button>' +
+      '</div>' +
+      (state.drive.message ? '<p class="help" style="color:' + (state.drive.status === 'error' ? 'var(--red)' : 'inherit') + '">' + escapeHtml(state.drive.message) + '</p>' : '') +
+      '<div class="row" style="margin-top:14px;">' +
+        '<button class="btn-ghost" onclick="restoreFromDrive()">Restore latest backup from Drive</button>' +
+      '</div>' +
+    '</div>' +
+    '<div class="settings-section">' +
+      '<h3>Local backup</h3>' +
+      '<p class="help">Works with no setup. Downloads everything as a single JSON file you can keep anywhere.</p>' +
+      '<button class="btn" style="background:transparent;border:1px solid rgba(30,42,56,0.3);color:var(--ink);" onclick="downloadLocalBackup()">Download backup file</button>' +
+    '</div>' +
+    '<div class="settings-section">' +
+      '<h3>Reset</h3>' +
+      (!state.confirmClear
+        ? '<button class="btn-ghost danger" onclick="requestClear()">Clear all entries on this device</button>'
+        : '<div><span style="font-family:var(--mono);font-size:13px;color:var(--ink);">Delete every local entry? This can\'t be undone.</span> ' +
+          '<button class="btn-ghost danger" onclick="clearAll()">Yes, clear it</button> ' +
+          '<button class="btn-ghost" onclick="cancelClear()">Cancel</button></div>') +
+    '</div>' +
+  '</div>';
+}
+
+function render() {
+  var body;
+  if (state.view === 'today') body = renderToday();
+  else if (state.view === 'log') body = renderLog();
+  else if (state.view === 'review') body = renderReview();
+  else body = renderSettings();
+
+  var app = document.getElementById('app');
+  app.innerHTML = renderHeader() + body;
+}
+
+/* ---------------- Boot ---------------- */
+loadData();
+render();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('./service-worker.js').catch(function () {});
+  });
+}
+</script>
+</body>
+</html>
