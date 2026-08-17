@@ -127,6 +127,7 @@ var LS_CLIENT_ID = 'fieldJournal.googleClientId';
 var LS_DRIVE_JSON_ID = 'fieldJournal.driveFileId.json';
 var LS_DRIVE_MD_ID = 'fieldJournal.driveFileId.md';
 var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+var DEFAULT_CLIENT_ID = '61887309480-so3paptu0ok8ovu8g64d53j66c82ttfu.apps.googleusercontent.com';
 
 /* ---------------- App state ---------------- */
 var state = {
@@ -222,7 +223,8 @@ var accessToken = null;
 var tokenExpiresAt = 0;
 
 function getClientId() {
-  return (localStorage.getItem(LS_CLIENT_ID) || '').trim();
+  var stored = (localStorage.getItem(LS_CLIENT_ID) || '').trim();
+  return stored || DEFAULT_CLIENT_ID;
 }
 
 function ensureTokenClient() {
@@ -672,7 +674,7 @@ function renderSettings() {
   '<div class="panel">' +
     '<div class="settings-section">' +
       '<h3>Google Drive backup</h3>' +
-      '<p class="help">Paste the OAuth Client ID from your own Google Cloud project (see the README that came with this app for the one-time setup). Nothing is sent anywhere else \u2014 the app talks to Google directly from your phone.</p>' +
+      '<p class="help">Your Client ID is already set. If you ever redeploy this app to a different URL, create a new one from your Google Cloud project and paste it here (see the README).</p>' +
       '<input type="text" class="textinput" id="client-id-input" placeholder="xxxxxxxxxx.apps.googleusercontent.com" value="' + escapeHtml(draft) + '" />' +
       '<div class="row" style="margin-top:10px;">' +
         '<button class="btn btn-primary" onclick="saveClientId()">Save Client ID</button>' +
