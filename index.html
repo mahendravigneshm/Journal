@@ -88,6 +88,14 @@
   .entry-num { font-family: var(--mono); font-size: 12px; color: rgba(30,42,56,0.55); flex-shrink: 0; }
   .entry-date { font-family: var(--mono); font-size: 12px; color: rgba(30,42,56,0.55); flex-shrink: 0; width: 88px; white-space: nowrap; }
   .edited-tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(30,42,56,0.4); flex-shrink: 0; }
+
+  .mode-toggle { display: inline-flex; border: 1px solid rgba(30,42,56,0.2); border-radius: 999px; padding: 2px; margin-bottom: 18px; }
+  .mode-btn { font-family: var(--mono); font-size: 12px; padding: 6px 14px; border: none; background: none; border-radius: 999px; color: rgba(30,42,56,0.55); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .mode-btn.active { background: var(--ink); color: var(--paper); }
+  .canvas-wrap { width: 100%; aspect-ratio: 8 / 10; border: 1px solid rgba(30,42,56,0.25); border-radius: 2px; overflow: hidden; background: var(--paper); }
+  .draw-canvas { width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; }
+  .entry-snippet-drawing { display: flex; align-items: center; gap: 8px; flex: 1; overflow: hidden; }
+  .entry-snippet-drawing em { font-family: var(--serif); font-style: italic; color: rgba(30,42,56,0.55); font-size: 14px; }
   .entry-snippet { flex: 1; font-family: var(--serif); font-size: 15px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .entry-detail { margin-top: 12px; padding-left: 0; font-family: var(--serif); color: var(--ink); font-size: 15px; }
   @media (min-width: 640px) { .entry-detail { padding-left: 96px; } }
@@ -127,6 +135,7 @@ var LS_DATA = 'fieldJournal.data.v1';
 var LS_CLIENT_ID = 'fieldJournal.googleClientId';
 var LS_DRIVE_JSON_ID = 'fieldJournal.driveFileId.json';
 var LS_DRIVE_MD_ID = 'fieldJournal.driveFileId.md';
+var LS_COMPOSE_MODE = 'fieldJournal.composeMode';
 var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 var DEFAULT_CLIENT_ID = '61887309480-so3paptu0ok8ovu8g64d53j66c82ttfu.apps.googleusercontent.com';
 
@@ -140,7 +149,8 @@ var state = {
   confirmClear: false,
   saving: false,
   justSaved: false,
-  form: { happened: '', did: '', change: '', freeform: '' },
+  form: { happened: '', did: '', change: '', freeform: '', strokes: [] },
+  composeMode: 'write', // 'write' | 'type' \u2014 overridden from localStorage at boot
   drive: { status: 'idle', message: '' }, // idle | syncing | success | error | needs-setup
   settingsClientIdDraft: null
 };
@@ -209,10 +219,14 @@ function buildMarkdownExport(entries) {
   var lines = ['# Field Journal', '', '_Backed up ' + new Date().toLocaleString('en-GB') + ' \u00b7 ' + entries.length + ' ' + (entries.length === 1 ? 'entry' : 'entries') + '_', ''];
   entries.forEach(function (e) {
     lines.push('## Entry ' + String(e.number).padStart(3, '0') + ' \u2014 ' + formatDisplayDate(e.date));
-    if (e.happened) lines.push('', '**What happened**', e.happened);
-    if (e.did) lines.push('', '**What I did**', e.did);
-    if (e.change) lines.push('', "**What I'd do differently**", e.change);
-    if (e.freeform) lines.push('', '**Notes**', e.freeform);
+    if (e.strokes && e.strokes.length) {
+      lines.push('', '_Handwritten entry \u2014 open the app, or restore journal-data.json, to see the drawing._');
+    } else {
+      if (e.happened) lines.push('', '**What happened**', e.happened);
+      if (e.did) lines.push('', '**What I did**', e.did);
+      if (e.change) lines.push('', "**What I'd do differently**", e.change);
+      if (e.freeform) lines.push('', '**Notes**', e.freeform);
+    }
     lines.push('');
   });
   return lines.join('\n');
@@ -410,6 +424,183 @@ function downloadLocalBackup() {
   URL.revokeObjectURL(url);
 }
 
+/* ---------------- Handwriting canvas ---------------- */
+// Strokes are stored as vector points in a fixed logical coordinate space
+// (not raw pixels, and not a rasterized PNG) so they stay crisp at any
+// screen size, take very little storage, and can be redrawn into an
+// editable canvas later.
+var LOGICAL_W = 800;
+var LOGICAL_H = 1000;
+var RULE_GAP = 70;
+var INK_COLOR = '#1E2A38';
+var PAGE_COLOR = '#F4F1E8';
+
+var drawState = { strokes: [], currentStroke: null };
+var isDrawingActive = false; // true while a pointer is down on a canvas
+var renderQueued = false;    // a render() arrived mid-stroke; run it once the stroke ends
+
+function logicalToPixel(p, w, h) {
+  return { x: (p.x / LOGICAL_W) * w, y: (p.y / LOGICAL_H) * h };
+}
+
+function redrawCanvas(canvas) {
+  var ctx = canvas._ctx;
+  if (!ctx) return;
+  var w = canvas._cssW, h = canvas._cssH;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = PAGE_COLOR;
+  ctx.fillRect(0, 0, w, h);
+  ctx.strokeStyle = 'rgba(30,42,56,0.16)';
+  ctx.lineWidth = 1;
+  for (var ly = RULE_GAP; ly < LOGICAL_H; ly += RULE_GAP) {
+    var py = Math.round((ly / LOGICAL_H) * h) + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, py);
+    ctx.lineTo(w, py);
+    ctx.stroke();
+  }
+  ctx.strokeStyle = INK_COLOR;
+  ctx.lineWidth = 2.4;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  var all = drawState.strokes.slice();
+  if (drawState.currentStroke) all.push(drawState.currentStroke);
+  all.forEach(function (stroke) {
+    if (stroke.length < 2) return;
+    ctx.beginPath();
+    var p0 = logicalToPixel(stroke[0], w, h);
+    ctx.moveTo(p0.x, p0.y);
+    for (var i = 1; i < stroke.length; i++) {
+      var p = logicalToPixel(stroke[i], w, h);
+      ctx.lineTo(p.x, p.y);
+    }
+    ctx.stroke();
+  });
+}
+
+function syncStrokesToActiveTarget() {
+  if (state.view === 'today' && state.composeMode === 'write') {
+    state.form.strokes = drawState.strokes.slice();
+  }
+}
+
+function initDrawingCanvas(canvasId) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  var rect = canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0) return; // not laid out yet
+  var dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+  var ctx = canvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+  canvas._ctx = ctx;
+  canvas._cssW = rect.width;
+  canvas._cssH = rect.height;
+  redrawCanvas(canvas);
+
+  var drawing = false;
+  function pointFromEvent(e) {
+    var r = canvas.getBoundingClientRect();
+    var xr = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    var yr = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
+    return { x: Math.round(xr * LOGICAL_W), y: Math.round(yr * LOGICAL_H) };
+  }
+  function endStroke() {
+    if (!drawing) return;
+    drawing = false;
+    if (drawState.currentStroke && drawState.currentStroke.length > 1) {
+      drawState.strokes.push(drawState.currentStroke);
+    }
+    drawState.currentStroke = null;
+    redrawCanvas(canvas);
+    syncStrokesToActiveTarget();
+    updateSaveButtonState();
+    isDrawingActive = false;
+    if (renderQueued) { renderQueued = false; performRender(); }
+  }
+  canvas.onpointerdown = function (e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    isDrawingActive = true;
+    drawing = true;
+    try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    drawState.currentStroke = [pointFromEvent(e)];
+    redrawCanvas(canvas);
+    e.preventDefault();
+  };
+  canvas.onpointermove = function (e) {
+    if (!drawing) return;
+    drawState.currentStroke.push(pointFromEvent(e));
+    redrawCanvas(canvas);
+    e.preventDefault();
+  };
+  canvas.onpointerup = endStroke;
+  canvas.onpointercancel = endStroke;
+  canvas.onpointerleave = endStroke;
+}
+
+function initActiveCanvas() {
+  if (state.view === 'today' && state.composeMode === 'write') {
+    drawState.strokes = (state.form.strokes || []).slice();
+    drawState.currentStroke = null;
+    initDrawingCanvas('today-canvas');
+  } else if (state.view === 'log' && state.editingId) {
+    var entry = null;
+    for (var i = 0; i < state.entries.length; i++) {
+      if (state.entries[i].id === state.editingId) { entry = state.entries[i]; break; }
+    }
+    if (entry && entry.strokes) {
+      drawState.strokes = entry.strokes.slice();
+      drawState.currentStroke = null;
+      initDrawingCanvas('edit-canvas');
+    }
+  }
+}
+
+function undoStroke(canvasId) {
+  drawState.strokes.pop();
+  var canvas = document.getElementById(canvasId);
+  if (canvas) redrawCanvas(canvas);
+  syncStrokesToActiveTarget();
+  updateSaveButtonState();
+}
+
+function clearDrawing(canvasId) {
+  drawState.strokes = [];
+  drawState.currentStroke = null;
+  var canvas = document.getElementById(canvasId);
+  if (canvas) redrawCanvas(canvas);
+  syncStrokesToActiveTarget();
+  updateSaveButtonState();
+}
+
+function setComposeMode(mode) {
+  if (state.composeMode === mode) return;
+  state.composeMode = mode;
+  localStorage.setItem(LS_COMPOSE_MODE, mode);
+  render();
+}
+
+// Static (non-interactive) rendering of saved strokes, used in Log/Review.
+// styleAttr controls display size \u2014 pass a small fixed box for thumbnails,
+// or width:100%;height:auto for a full-page view.
+function strokesToSvg(strokes, styleAttr, strokeWidth) {
+  strokeWidth = strokeWidth || 5;
+  var rules = '';
+  for (var ly = RULE_GAP; ly < LOGICAL_H; ly += RULE_GAP) {
+    rules += '<line x1="0" y1="' + ly + '" x2="' + LOGICAL_W + '" y2="' + ly + '" stroke="rgba(30,42,56,0.14)" stroke-width="2"/>';
+  }
+  var paths = (strokes || []).map(function (stroke) {
+    if (stroke.length < 2) return '';
+    var d = 'M ' + stroke[0].x + ' ' + stroke[0].y + ' L ' + stroke.slice(1).map(function (p) { return p.x + ' ' + p.y; }).join(' L ');
+    return '<path d="' + d + '" stroke="' + INK_COLOR + '" stroke-width="' + strokeWidth + '" fill="none" stroke-linecap="round" stroke-linejoin="round"/>';
+  }).join('');
+  return '<svg viewBox="0 0 ' + LOGICAL_W + ' ' + LOGICAL_H + '" style="' + (styleAttr || '') + '">' +
+    '<rect width="' + LOGICAL_W + '" height="' + LOGICAL_H + '" fill="' + PAGE_COLOR + '"/>' + rules + paths +
+  '</svg>';
+}
+
 /* ---------------- Actions ---------------- */
 function captureFormFromDom() {
   ['happened', 'did', 'change', 'freeform'].forEach(function (key) {
@@ -444,6 +635,23 @@ function cancelEdit() {
 }
 
 function saveEdit(id) {
+  var target = null;
+  for (var i = 0; i < state.entries.length; i++) {
+    if (state.entries[i].id === id) { target = state.entries[i]; break; }
+  }
+  if (target && target.strokes) {
+    if (!drawState.strokes.length) return;
+    var newStrokes = drawState.strokes.map(function (s) { return s.slice(); });
+    state.entries = state.entries.map(function (e) {
+      if (e.id !== id) return e;
+      return Object.assign({}, e, { strokes: newStrokes, updatedAt: new Date().toISOString() });
+    });
+    saveData();
+    state.editingId = null;
+    render();
+    backupToDrive(false);
+    return;
+  }
   var read = function (fieldId) {
     var el = document.getElementById(fieldId);
     return el ? el.value.trim() : '';
@@ -470,6 +678,33 @@ function saveEdit(id) {
 }
 
 function saveEntry() {
+  if (state.composeMode === 'write') {
+    if (!drawState.strokes.length) return;
+    var todayW = localISODate();
+    var drawEntry = {
+      id: String(Date.now()),
+      number: state.meta.nextEntryNumber,
+      date: todayW,
+      createdAt: new Date().toISOString(),
+      strokes: drawState.strokes.map(function (s) { return s.slice(); }),
+      reviewed: false
+    };
+    state.entries = [drawEntry].concat(state.entries);
+    state.meta = Object.assign({}, state.meta, { nextEntryNumber: state.meta.nextEntryNumber + 1 });
+    var okW = saveData();
+    drawState.strokes = [];
+    drawState.currentStroke = null;
+    state.form.strokes = [];
+    state.justSaved = true;
+    render();
+    setTimeout(function () { state.justSaved = false; render(); }, 2200);
+    if (!okW) {
+      state.drive = { status: 'error', message: 'Local storage is full or unavailable \u2014 back up manually.' };
+    } else {
+      backupToDrive(false);
+    }
+    return;
+  }
   captureFormFromDom();
   var f = state.form;
   if (!f.happened.trim() && !f.did.trim() && !f.change.trim() && !f.freeform.trim()) return;
@@ -488,7 +723,7 @@ function saveEntry() {
   state.entries = [entry].concat(state.entries);
   state.meta = Object.assign({}, state.meta, { nextEntryNumber: state.meta.nextEntryNumber + 1 });
   var ok = saveData();
-  state.form = { happened: '', did: '', change: '', freeform: '' };
+  state.form = { happened: '', did: '', change: '', freeform: '', strokes: [] };
   state.justSaved = true;
   render();
   setTimeout(function () { state.justSaved = false; render(); }, 2200);
@@ -551,6 +786,9 @@ function iconChevron(down) {
 function iconPen() {
   return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 }
+function iconType() {
+  return '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="2"/><line x1="7" y1="10" x2="7.01" y2="10"/><line x1="11" y1="10" x2="11.01" y2="10"/><line x1="15" y1="10" x2="15.01" y2="10"/><line x1="7" y1="14" x2="15" y2="14"/></svg>';
+}
 
 function driveStatIcon() {
   if (state.drive.status === 'syncing') return iconSpinner();
@@ -612,16 +850,36 @@ function unreviewedCount() {
 function renderToday() {
   var today = localISODate();
   var hasToday = state.entries.some(function (e) { return e.date === today; });
+  var mode = state.composeMode;
   var f = state.form;
-  var canSave = f.happened.trim() || f.did.trim() || f.change.trim() || f.freeform.trim();
+  var canSave = mode === 'write'
+    ? (f.strokes && f.strokes.length > 0)
+    : (f.happened.trim() || f.did.trim() || f.change.trim() || f.freeform.trim());
+  var modeToggle = '' +
+    '<div class="mode-toggle">' +
+      '<button class="mode-btn' + (mode === 'write' ? ' active' : '') + '" onclick="setComposeMode(\'write\')">' + iconPen() + '<span>Write</span></button>' +
+      '<button class="mode-btn' + (mode === 'type' ? ' active' : '') + '" onclick="setComposeMode(\'type\')">' + iconType() + '<span>Type</span></button>' +
+    '</div>';
+  var content = mode === 'write'
+    ? (
+      '<div class="canvas-wrap"><canvas id="today-canvas" class="draw-canvas"></canvas></div>' +
+      '<div class="row" style="margin-top:8px;">' +
+        '<button class="btn-ghost" onclick="undoStroke(\'today-canvas\')">Undo stroke</button>' +
+        '<button class="btn-ghost" onclick="clearDrawing(\'today-canvas\')">Clear page</button>' +
+      '</div>'
+    )
+    : (
+      field('happened', 'What happened', 'The site visit, the meeting, the thing that took the day sideways\u2026', f.happened, 3) +
+      field('did', 'What I did', 'How you actually responded\u2026', f.did, 3) +
+      field('change', "What I'd do differently", 'The one adjustment for next time\u2026', f.change, 3) +
+      field('freeform', 'Anything else (optional)', "Free write, if something doesn't fit the boxes above\u2026", f.freeform, 2)
+    );
   return '' +
   '<div class="panel">' +
     '<div class="panel-head"><span class="meta-label">Entry No. ' + String(state.meta.nextEntryNumber).padStart(3, '0') + '</span><span class="meta-label">' + formatDisplayDate(today) + '</span></div>' +
     (hasToday ? '<div class="banner info">You\u2019ve already logged today \u2014 this will add a second entry.</div>' : '') +
-    field('happened', 'What happened', 'The site visit, the meeting, the thing that took the day sideways\u2026', f.happened, 3) +
-    field('did', 'What I did', 'How you actually responded\u2026', f.did, 3) +
-    field('change', "What I'd do differently", 'The one adjustment for next time\u2026', f.change, 3) +
-    field('freeform', 'Anything else (optional)', "Free write, if something doesn't fit the boxes above\u2026", f.freeform, 2) +
+    modeToggle +
+    content +
     '<div class="row" style="justify-content:flex-end;margin-top:8px;">' +
       '<button class="btn btn-primary" id="save-entry-btn" ' + (state.saving || !canSave ? 'disabled' : '') + ' onclick="saveEntry()">' + iconPen() + '<span>' + (state.justSaved ? 'Saved' : 'Save entry') + '</span></button>' +
     '</div>' +
@@ -649,6 +907,10 @@ function editField(id, label, value) {
 function updateSaveButtonState() {
   var btn = document.getElementById('save-entry-btn');
   if (!btn) return;
+  if (state.composeMode === 'write') {
+    btn.disabled = !(drawState.strokes.length > 0);
+    return;
+  }
   var keys = ['happened', 'did', 'change', 'freeform'];
   var canSave = keys.some(function (key) {
     var el = document.getElementById('field-' + key);
@@ -665,9 +927,21 @@ function renderLog() {
     body = state.entries.map(function (e) {
       var expanded = state.expandedId === e.id;
       var editing = state.editingId === e.id;
-      var snippet = e.happened || e.did || e.change || e.freeform || '(untitled entry)';
+      var isDrawing = !!(e.strokes && e.strokes.length);
       var detail = '';
-      if (editing) {
+      if (editing && isDrawing) {
+        detail = '<div class="entry-detail">' +
+          '<div class="canvas-wrap"><canvas id="edit-canvas" class="draw-canvas"></canvas></div>' +
+          '<div class="row" style="margin-top:8px;">' +
+            '<button class="btn-ghost" onclick="undoStroke(\'edit-canvas\')">Undo stroke</button>' +
+            '<button class="btn-ghost" onclick="clearDrawing(\'edit-canvas\')">Clear page</button>' +
+          '</div>' +
+          '<div class="row" style="margin-top:10px;">' +
+            '<button class="btn btn-primary" onclick="saveEdit(\'' + e.id + '\')">' + iconCheck() + '<span>Save changes</span></button>' +
+            '<button class="btn-ghost" onclick="cancelEdit()">Cancel</button>' +
+          '</div>' +
+        '</div>';
+      } else if (editing) {
         detail = '<div class="entry-detail">' +
           editField('edit-happened', 'What happened', e.happened) +
           editField('edit-did', 'What I did', e.did) +
@@ -676,6 +950,13 @@ function renderLog() {
           '<div class="row" style="margin-top:6px;">' +
             '<button class="btn btn-primary" onclick="saveEdit(\'' + e.id + '\')">' + iconCheck() + '<span>Save changes</span></button>' +
             '<button class="btn-ghost" onclick="cancelEdit()">Cancel</button>' +
+          '</div>' +
+        '</div>';
+      } else if (expanded && isDrawing) {
+        detail = '<div class="entry-detail">' +
+          strokesToSvg(e.strokes, 'width:100%;height:auto;display:block;border-radius:2px;border:1px solid rgba(30,42,56,0.12);') +
+          '<div class="row" style="margin-top:10px;">' +
+            '<button class="btn-ghost" onclick="startEdit(\'' + e.id + '\')">Edit this entry</button>' +
           '</div>' +
         '</div>';
       } else if (expanded) {
@@ -689,12 +970,15 @@ function renderLog() {
           '</div>' +
           '</div>';
       }
+      var snippetHtml = isDrawing
+        ? '<span class="entry-snippet entry-snippet-drawing">' + strokesToSvg(e.strokes, 'width:36px;height:45px;flex-shrink:0;border-radius:1px;border:1px solid rgba(30,42,56,0.15);', 28) + '<em>Handwritten</em></span>'
+        : '<span class="entry-snippet">' + escapeHtml(e.happened || e.did || e.change || e.freeform || '(untitled entry)') + '</span>';
       return '<div class="entry-row">' +
         '<button class="entry-row-btn" onclick="toggleExpand(\'' + e.id + '\')">' +
           '<span class="entry-num">\u2116' + String(e.number).padStart(3, '0') + '</span>' +
           '<span class="entry-date">' + formatDisplayDate(e.date) + '</span>' +
           (e.updatedAt ? '<span class="edited-tag">edited</span>' : '') +
-          '<span class="entry-snippet">' + escapeHtml(snippet) + '</span>' +
+          snippetHtml +
           (e.reviewed ? '<span class="stamp">' + iconCheck() + '<span>Reviewed</span></span>' : '') +
           iconChevron(!expanded) +
         '</button>' + detail +
@@ -716,10 +1000,16 @@ function renderReview() {
     body = '<p style="font-family:var(--serif);color:rgba(30,42,56,0.8);font-size:15px;">Nothing pending. Come back after a few more entries and look for what repeats \u2014 the same frustration, the same mistake, the same task avoided.</p>';
   } else {
     var rows = pending.map(function (e) {
+      var isDrawing = !!(e.strokes && e.strokes.length);
       return '<div style="padding-bottom:16px;border-bottom:1px solid rgba(30,42,56,0.1);margin-bottom:16px;">' +
         '<div class="meta-label" style="margin-bottom:4px;">\u2116' + String(e.number).padStart(3, '0') + ' \u00b7 ' + formatDisplayDate(e.date) + '</div>' +
-        (e.happened ? '<p style="font-family:var(--serif);color:var(--ink);font-size:15px;margin:0 0 4px;">' + textToHtml(e.happened) + '</p>' : '') +
-        (e.change ? '<p style="font-family:var(--serif);color:rgba(30,42,56,0.8);font-style:italic;font-size:14px;margin:0;">\u2192 ' + textToHtml(e.change) + '</p>' : '') +
+        (isDrawing
+          ? strokesToSvg(e.strokes, 'width:70px;height:88px;border-radius:2px;border:1px solid rgba(30,42,56,0.15);', 16)
+          : (
+            (e.happened ? '<p style="font-family:var(--serif);color:var(--ink);font-size:15px;margin:0 0 4px;">' + textToHtml(e.happened) + '</p>' : '') +
+            (e.change ? '<p style="font-family:var(--serif);color:rgba(30,42,56,0.8);font-style:italic;font-size:14px;margin:0;">\u2192 ' + textToHtml(e.change) + '</p>' : '')
+          )
+        ) +
       '</div>';
     }).join('');
     body = rows + '<button class="btn btn-primary" onclick="markReviewed()">' + iconCheck() + '<span>Mark reviewed</span></button>';
@@ -767,6 +1057,11 @@ function renderSettings() {
 }
 
 function render() {
+  if (isDrawingActive) { renderQueued = true; return; }
+  performRender();
+}
+
+function performRender() {
   var body;
   if (state.view === 'today') body = renderToday();
   else if (state.view === 'log') body = renderLog();
@@ -775,10 +1070,13 @@ function render() {
 
   var app = document.getElementById('app');
   app.innerHTML = renderHeader() + body;
+  requestAnimationFrame(initActiveCanvas);
 }
 
 /* ---------------- Boot ---------------- */
 loadData();
+var storedMode = localStorage.getItem(LS_COMPOSE_MODE);
+if (storedMode === 'type' || storedMode === 'write') state.composeMode = storedMode;
 render();
 
 if ('serviceWorker' in navigator) {
