@@ -87,6 +87,7 @@
   .entry-row-btn { width: 100%; display: flex; align-items: center; gap: 12px; background: none; border: none; text-align: left; cursor: pointer; padding: 0; font: inherit; color: inherit; }
   .entry-num { font-family: var(--mono); font-size: 12px; color: rgba(30,42,56,0.55); flex-shrink: 0; }
   .entry-date { font-family: var(--mono); font-size: 12px; color: rgba(30,42,56,0.55); flex-shrink: 0; width: 88px; white-space: nowrap; }
+  .edited-tag { font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(30,42,56,0.4); flex-shrink: 0; }
   .entry-snippet { flex: 1; font-family: var(--serif); font-size: 15px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .entry-detail { margin-top: 12px; padding-left: 0; font-family: var(--serif); color: var(--ink); font-size: 15px; }
   @media (min-width: 640px) { .entry-detail { padding-left: 96px; } }
@@ -135,6 +136,7 @@ var state = {
   entries: [],
   meta: { nextEntryNumber: 1, lastReviewAt: null },
   expandedId: null,
+  editingId: null,
   confirmClear: false,
   saving: false,
   justSaved: false,
@@ -420,12 +422,51 @@ function setView(view) {
   if (state.view === 'today') captureFormFromDom();
   state.view = view;
   state.expandedId = null;
+  state.editingId = null;
   render();
 }
 
 function toggleExpand(id) {
   state.expandedId = state.expandedId === id ? null : id;
+  if (state.expandedId !== id) state.editingId = null;
   render();
+}
+
+function startEdit(id) {
+  state.expandedId = id;
+  state.editingId = id;
+  render();
+}
+
+function cancelEdit() {
+  state.editingId = null;
+  render();
+}
+
+function saveEdit(id) {
+  var read = function (fieldId) {
+    var el = document.getElementById(fieldId);
+    return el ? el.value.trim() : '';
+  };
+  var happened = read('edit-happened');
+  var did = read('edit-did');
+  var change = read('edit-change');
+  var freeform = read('edit-freeform');
+  if (!happened && !did && !change && !freeform) return;
+  state.entries = state.entries.map(function (e) {
+    if (e.id !== id) return e;
+    return Object.assign({}, e, {
+      happened: happened,
+      did: did,
+      change: change,
+      freeform: freeform,
+      updatedAt: new Date().toISOString()
+    });
+  });
+  saveData();
+  state.editingId = null;
+  render();
+  backupToDrive(false);
 }
 
 function saveEntry() {
@@ -595,6 +636,14 @@ function field(key, label, placeholder, value, rows) {
   '</div>';
 }
 
+function editField(id, label, value) {
+  return '' +
+  '<div class="field-block">' +
+    '<div class="field-label">' + label + '</div>' +
+    '<textarea class="field" id="' + id + '" rows="3">' + escapeHtml(value) + '</textarea>' +
+  '</div>';
+}
+
 // Enabling/disabling Save is done as a direct DOM tweak (not a full render()) so typing
 // never loses cursor focus \u2014 render() only runs on save, tab switches, and similar.
 function updateSaveButtonState() {
@@ -615,20 +664,36 @@ function renderLog() {
   } else {
     body = state.entries.map(function (e) {
       var expanded = state.expandedId === e.id;
+      var editing = state.editingId === e.id;
       var snippet = e.happened || e.did || e.change || e.freeform || '(untitled entry)';
       var detail = '';
-      if (expanded) {
+      if (editing) {
+        detail = '<div class="entry-detail">' +
+          editField('edit-happened', 'What happened', e.happened) +
+          editField('edit-did', 'What I did', e.did) +
+          editField('edit-change', "What I'd do differently", e.change) +
+          editField('edit-freeform', 'Notes', e.freeform) +
+          '<div class="row" style="margin-top:6px;">' +
+            '<button class="btn btn-primary" onclick="saveEdit(\'' + e.id + '\')">' + iconCheck() + '<span>Save changes</span></button>' +
+            '<button class="btn-ghost" onclick="cancelEdit()">Cancel</button>' +
+          '</div>' +
+        '</div>';
+      } else if (expanded) {
         detail = '<div class="entry-detail">' +
           (e.happened ? '<div class="sec"><div class="field-label">What happened</div>' + textToHtml(e.happened) + '</div>' : '') +
           (e.did ? '<div class="sec"><div class="field-label">What I did</div>' + textToHtml(e.did) + '</div>' : '') +
           (e.change ? '<div class="sec"><div class="field-label">What I\'d do differently</div>' + textToHtml(e.change) + '</div>' : '') +
           (e.freeform ? '<div class="sec"><div class="field-label">Notes</div>' + textToHtml(e.freeform) + '</div>' : '') +
+          '<div class="row" style="margin-top:4px;">' +
+            '<button class="btn-ghost" onclick="startEdit(\'' + e.id + '\')">Edit this entry</button>' +
+          '</div>' +
           '</div>';
       }
       return '<div class="entry-row">' +
         '<button class="entry-row-btn" onclick="toggleExpand(\'' + e.id + '\')">' +
           '<span class="entry-num">\u2116' + String(e.number).padStart(3, '0') + '</span>' +
           '<span class="entry-date">' + formatDisplayDate(e.date) + '</span>' +
+          (e.updatedAt ? '<span class="edited-tag">edited</span>' : '') +
           '<span class="entry-snippet">' + escapeHtml(snippet) + '</span>' +
           (e.reviewed ? '<span class="stamp">' + iconCheck() + '<span>Reviewed</span></span>' : '') +
           iconChevron(!expanded) +
