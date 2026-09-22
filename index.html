@@ -105,7 +105,7 @@
   .empty { text-align: center; padding: 40px 10px; font-family: var(--serif); color: rgba(30,42,56,0.75); }
 
   label.checkrow { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink); cursor: pointer; }
-  input[type="text"].textinput {
+  input[type="text"].textinput, input[type="password"].textinput {
     width: 100%; padding: 10px 12px; border: 1px solid rgba(30,42,56,0.25); border-radius: 3px;
     font-family: var(--mono); font-size: 14px; color: var(--ink); background: #fff;
   }
@@ -120,7 +120,10 @@
 </style>
 </head>
 <body>
-<div class="wrap" id="app"></div>
+<div class="wrap">
+  <div id="header-slot"></div>
+  <div id="body-slot"></div>
+</div>
 
 <script>
 /* ---------------- Storage keys ---------------- */
@@ -128,6 +131,7 @@ var LS_DATA = 'fieldJournal.data.v1';
 var LS_CLIENT_ID = 'fieldJournal.googleClientId';
 var LS_DRIVE_JSON_ID = 'fieldJournal.driveFileId.json';
 var LS_DRIVE_MD_ID = 'fieldJournal.driveFileId.md';
+var LS_PIN = 'fieldJournal.pin';
 var DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
 var DEFAULT_CLIENT_ID = '61887309480-so3paptu0ok8ovu8g64d53j66c82ttfu.apps.googleusercontent.com';
 
@@ -143,7 +147,18 @@ var state = {
   justSaved: false,
   form: { happened: '', did: '', change: '', freeform: '' },
   drive: { status: 'idle', message: '' }, // idle | syncing | success | error | needs-setup
-  settingsClientIdDraft: null
+  settingsClientIdDraft: null,
+  hasPin: false,
+  locked: false,
+  unlockBusy: false,
+  unlockError: '',
+  pinBusy: false,
+  pinSetupError: '',
+  showChangePin: false,
+  changePinError: '',
+  showTurnOffPin: false,
+  turnOffPinError: '',
+  showForgotPin: false
 };
 
 /* ---------------- Date helpers ---------------- */
@@ -203,6 +218,30 @@ function saveData() {
   } catch (e) {
     return false;
   }
+}
+
+/* ---------------- App-lock PIN (SHA-256 hash + salt \u2014 a screen lock, not data encryption) ---------------- */
+function bufToBase64(buf) {
+  var bytes = new Uint8Array(buf);
+  var binary = '';
+  for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+function base64ToBuf(b64) {
+  var binary = atob(b64);
+  var bytes = new Uint8Array(binary.length);
+  for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+function hashPin(pin, saltBuf) {
+  var saltBytes = new Uint8Array(saltBuf);
+  var data = new TextEncoder().encode(pin);
+  var combined = new Uint8Array(saltBytes.length + data.length);
+  combined.set(saltBytes, 0);
+  combined.set(data, saltBytes.length);
+  return crypto.subtle.digest('SHA-256', combined).then(function (hashBuf) {
+    return bufToBase64(hashBuf);
+  });
 }
 
 /* ---------------- Markdown export ---------------- */
@@ -342,30 +381,68 @@ function driveDownloadFile(fileId, interactive) {
 }
 
 function backupToDrive(interactive) {
+  // Silent background syncs must never blow away an in-progress uncontrolled
+  // input (someone mid-entry, mid-edit) elsewhere on the page, so they only
+  // touch the header; an explicit tap gets the full picture.
+  var doRender = interactive ? render : renderHeaderOnly;
   if (!getClientId()) {
     state.drive = { status: 'needs-setup', message: '' };
-    render();
+    doRender();
     return;
   }
   state.drive = { status: 'syncing', message: '' };
-  render();
-  var jsonContent = JSON.stringify({ entries: state.entries, meta: state.meta }, null, 2);
-  var mdContent = buildMarkdownExport(state.entries);
-  driveUpsertFile('journal-data.json', 'application/json', jsonContent, LS_DRIVE_JSON_ID, interactive)
-    .then(function () {
-      return driveUpsertFile('Field Journal.md', 'text/markdown', mdContent, LS_DRIVE_MD_ID, interactive);
-    })
-    .then(function () {
-      state.drive = { status: 'success', message: 'Backed up to Drive.' };
-      render();
-    })
-    .catch(function (err) {
-      var silentSkip = !interactive && (err.message === 'no-client-id' || err.message === 'popup_closed' || err.message === 'access_denied' || err.message === 'interaction_required');
-      state.drive = silentSkip
-        ? { status: 'idle', message: '' }
-        : { status: 'error', message: "Couldn't reach Drive \u2014 tap to try again." };
-      render();
+  doRender();
+
+  var guard = state.entries.length === 0
+    ? checkSafeToOverwriteWithEmpty(interactive, doRender)
+    : Promise.resolve(true);
+
+  guard.then(function (safe) {
+    if (!safe) return; // guard already set state.drive + rendered a refusal message
+    var jsonContent = JSON.stringify({ entries: state.entries, meta: state.meta }, null, 2);
+    var mdContent = buildMarkdownExport(state.entries);
+    return driveUpsertFile('journal-data.json', 'application/json', jsonContent, LS_DRIVE_JSON_ID, interactive)
+      .then(function () {
+        return driveUpsertFile('Field Journal.md', 'text/markdown', mdContent, LS_DRIVE_MD_ID, interactive);
+      })
+      .then(function () {
+        state.drive = { status: 'success', message: 'Backed up to Drive.' };
+        doRender();
+      });
+  }).catch(function (err) {
+    var silentSkip = !interactive && (err.message === 'no-client-id' || err.message === 'popup_closed' || err.message === 'access_denied' || err.message === 'interaction_required');
+    state.drive = silentSkip
+      ? { status: 'idle', message: '' }
+      : { status: 'error', message: "Couldn't reach Drive \u2014 tap to try again." };
+    doRender();
+  });
+}
+
+// Refuses to let an empty local state silently overwrite a Drive backup that
+// actually has entries \u2014 this exact gap once caused a real data loss.
+// Resolves true only when it's actually safe to proceed with the write.
+function checkSafeToOverwriteWithEmpty(interactive, doRender) {
+  var cachedId = localStorage.getItem(LS_DRIVE_JSON_ID);
+  var idStep = cachedId ? Promise.resolve(cachedId) : driveFindFile('journal-data.json').then(function (f) {
+    return f ? f.id : null;
+  });
+  return idStep.then(function (fileId) {
+    if (!fileId) return true; // nothing on Drive yet, nothing to protect
+    return driveDownloadFile(fileId, interactive).then(function (text) {
+      var existing;
+      try { existing = JSON.parse(text); } catch (e) { existing = null; }
+      if (existing && existing.entries && existing.entries.length > 0) {
+        state.drive = { status: 'error', message: 'This device shows 0 entries but Drive has ' + existing.entries.length + ' \u2014 refusing to overwrite. Use "Restore from Drive" instead.' };
+        doRender();
+        return false;
+      }
+      return true;
+    }).catch(function () {
+      state.drive = { status: 'error', message: "Couldn't verify the existing Drive backup \u2014 tap to try again." };
+      doRender();
+      return false;
     });
+  });
 }
 
 function restoreFromDrive() {
@@ -386,7 +463,13 @@ function restoreFromDrive() {
     return driveDownloadFile(fileId, true);
   }).then(function (text) {
     var parsed = JSON.parse(text);
-    state.entries = parsed.entries || [];
+    var restoredEntries = parsed.entries || [];
+    if (restoredEntries.length === 0 && state.entries.length > 0) {
+      state.drive = { status: 'error', message: 'Drive backup is empty but this device has ' + state.entries.length + ' \u2014 refusing to overwrite. Back this device up first if you meant to clear it.' };
+      render();
+      return;
+    }
+    state.entries = restoredEntries;
     state.meta = parsed.meta || { nextEntryNumber: 1, lastReviewAt: null };
     saveData();
     state.drive = { status: 'success', message: 'Restored from Drive.' };
@@ -492,7 +575,17 @@ function saveEntry() {
   state.form = { happened: '', did: '', change: '', freeform: '' };
   state.justSaved = true;
   render();
-  setTimeout(function () { state.justSaved = false; render(); }, 2200);
+  // Only swap the button's label back, not a full render \u2014 by the time this
+  // fires the person may already be mid-draft on a new entry, and a full
+  // render would wipe out an uncontrolled textarea they're actively typing in.
+  setTimeout(function () {
+    state.justSaved = false;
+    var btn = document.getElementById('save-entry-btn');
+    if (btn) {
+      var span = btn.querySelector('span');
+      if (span) span.textContent = 'Save entry';
+    }
+  }, 2200);
   if (!ok) {
     state.drive = { status: 'error', message: 'Local storage is full or unavailable \u2014 back up manually.' };
   } else {
@@ -528,6 +621,109 @@ function saveClientId() {
   accessToken = null;
   state.drive = { status: 'idle', message: value ? 'Saved. Tap "Connect & back up" to sign in.' : '' };
   render();
+}
+
+/* ---------------- App-lock (PIN/password) actions ---------------- */
+function readVal(id) {
+  var el = document.getElementById(id);
+  return el ? el.value : '';
+}
+
+function submitUnlock() {
+  var pin = readVal('unlock-passphrase');
+  if (!pin) return;
+  var cfg;
+  try { cfg = JSON.parse(localStorage.getItem(LS_PIN)); } catch (e) { cfg = null; }
+  if (!cfg) { state.unlockError = 'No PIN set on this device.'; render(); return; }
+  state.unlockBusy = true;
+  state.unlockError = '';
+  render();
+  hashPin(pin, base64ToBuf(cfg.salt)).then(function (hash) {
+    if (hash !== cfg.hash) { state.unlockError = 'Wrong PIN \u2014 try again.'; state.unlockBusy = false; render(); return; }
+    state.locked = false;
+    state.unlockBusy = false;
+    state.showForgotPin = false;
+    render();
+  });
+}
+
+function toggleForgotPin(v) { state.showForgotPin = v; render(); }
+function forgotPin() {
+  // Not real encryption \u2014 the PIN only gates the screen, so resetting it
+  // never touches the entries themselves.
+  localStorage.removeItem(LS_PIN);
+  state.hasPin = false;
+  state.locked = false;
+  state.showForgotPin = false;
+  state.unlockError = '';
+  render();
+}
+
+function lockJournal() {
+  state.locked = true;
+  render();
+}
+
+function submitSetupPin() {
+  var p1 = readVal('setup-pass1');
+  var p2 = readVal('setup-pass2');
+  if (p1.length < 4) { state.pinSetupError = 'Use at least 4 characters.'; render(); return; }
+  if (p1 !== p2) { state.pinSetupError = "Those don't match."; render(); return; }
+  state.pinBusy = true;
+  state.pinSetupError = '';
+  render();
+  var salt = crypto.getRandomValues(new Uint8Array(16));
+  hashPin(p1, salt).then(function (hash) {
+    localStorage.setItem(LS_PIN, JSON.stringify({ salt: bufToBase64(salt.buffer), hash: hash }));
+    state.hasPin = true;
+    state.pinBusy = false;
+    render();
+  });
+}
+
+function toggleChangePin(v) { state.showChangePin = v; state.changePinError = ''; render(); }
+function toggleTurnOffPin(v) { state.showTurnOffPin = v; state.turnOffPinError = ''; render(); }
+
+function submitChangePin() {
+  var current = readVal('change-pass-current');
+  var n1 = readVal('change-pass-new1');
+  var n2 = readVal('change-pass-new2');
+  if (n1.length < 4) { state.changePinError = 'Use at least 4 characters.'; render(); return; }
+  if (n1 !== n2) { state.changePinError = "New PIN doesn't match."; render(); return; }
+  var cfg;
+  try { cfg = JSON.parse(localStorage.getItem(LS_PIN)); } catch (e) { cfg = null; }
+  if (!cfg) { state.changePinError = 'No PIN set on this device.'; render(); return; }
+  state.pinBusy = true;
+  state.changePinError = '';
+  render();
+  hashPin(current, base64ToBuf(cfg.salt)).then(function (hash) {
+    if (hash !== cfg.hash) { state.pinBusy = false; state.changePinError = 'Current PIN is incorrect.'; render(); return; }
+    var newSalt = crypto.getRandomValues(new Uint8Array(16));
+    hashPin(n1, newSalt).then(function (newHash) {
+      localStorage.setItem(LS_PIN, JSON.stringify({ salt: bufToBase64(newSalt.buffer), hash: newHash }));
+      state.pinBusy = false;
+      state.showChangePin = false;
+      render();
+    });
+  });
+}
+
+function submitTurnOffPin() {
+  var pin = readVal('turnoff-pass');
+  var cfg;
+  try { cfg = JSON.parse(localStorage.getItem(LS_PIN)); } catch (e) { cfg = null; }
+  if (!cfg) { state.turnOffPinError = 'No PIN set on this device.'; render(); return; }
+  state.pinBusy = true;
+  state.turnOffPinError = '';
+  render();
+  hashPin(pin, base64ToBuf(cfg.salt)).then(function (hash) {
+    if (hash !== cfg.hash) { state.pinBusy = false; state.turnOffPinError = 'PIN is incorrect.'; render(); return; }
+    localStorage.removeItem(LS_PIN);
+    state.hasPin = false;
+    state.showTurnOffPin = false;
+    state.pinBusy = false;
+    render();
+  });
 }
 
 /* ---------------- Rendering ---------------- */
@@ -575,15 +771,18 @@ function driveStatColor() {
 
 function renderHeader() {
   var streak = computeStreak(state.entries);
-  var tabs = [
-    ['today', 'Today'],
-    ['log', 'Log'],
-    ['review', 'Review' + (unreviewedCount() ? ' (' + unreviewedCount() + ')' : '')],
-    ['settings', 'Settings']
-  ];
-  var tabsHtml = tabs.map(function (t) {
-    return '<button class="tab' + (state.view === t[0] ? ' active' : '') + '" onclick="setView(\'' + t[0] + '\')">' + t[1] + '</button>';
-  }).join('');
+  var tabsHtml = '';
+  if (!state.locked) {
+    var tabs = [
+      ['today', 'Today'],
+      ['log', 'Log'],
+      ['review', 'Review' + (unreviewedCount() ? ' (' + unreviewedCount() + ')' : '')],
+      ['settings', 'Settings']
+    ];
+    tabsHtml = '<nav class="tabs">' + tabs.map(function (t) {
+      return '<button class="tab' + (state.view === t[0] ? ' active' : '') + '" onclick="setView(\'' + t[0] + '\')">' + t[1] + '</button>';
+    }).join('') + '</nav>';
+  }
 
   return '' +
   '<header class="appheader">' +
@@ -597,8 +796,32 @@ function renderHeader() {
         '</button>' +
       '</div>' +
     '</div>' +
-    '<nav class="tabs">' + tabsHtml + '</nav>' +
+    tabsHtml +
   '</header>';
+}
+
+function renderLockScreen() {
+  var forgot = !state.showForgotPin ? '' : (
+    '<div class="banner info" style="text-align:left;">This clears the current PIN so you can set a new one. Your entries aren\u2019t affected \u2014 they were never locked by it, just hidden behind it.</div>' +
+    '<div class="row" style="justify-content:center;">' +
+      '<button class="btn-ghost danger" onclick="forgotPin()">Reset PIN</button>' +
+      '<button class="btn-ghost" onclick="toggleForgotPin(false)">Cancel</button>' +
+    '</div>'
+  );
+  return '' +
+  '<div class="panel" style="text-align:center;padding:44px 24px;">' +
+    '<div style="font-size:30px;margin-bottom:10px;">\ud83d\udd12</div>' +
+    '<h2 style="font-family:var(--serif);font-size:19px;color:var(--ink);margin:0 0 6px;">Journal is locked</h2>' +
+    '<p style="font-family:var(--serif);color:rgba(30,42,56,0.7);font-size:14px;margin:0 0 20px;">Enter your PIN to unlock it.</p>' +
+    (state.unlockError ? '<div class="banner error" style="text-align:left;">' + escapeHtml(state.unlockError) + '</div>' : '') +
+    '<input type="password" class="textinput" id="unlock-passphrase" placeholder="PIN" style="max-width:280px;margin:0 auto 14px;text-align:center;" onkeydown="if(event.key===\'Enter\')submitUnlock()" autofocus />' +
+    '<div>' +
+      '<button class="btn btn-primary" ' + (state.unlockBusy ? 'disabled' : '') + ' onclick="submitUnlock()">' + (state.unlockBusy ? 'Unlocking\u2026' : 'Unlock') + '</button>' +
+    '</div>' +
+    (!state.showForgotPin
+      ? '<div style="margin-top:14px;"><button class="btn-ghost" onclick="toggleForgotPin(true)">Forgot PIN?</button></div>'
+      : '<div style="margin-top:14px;">' + forgot + '</div>') +
+  '</div>';
 }
 
 function onDriveStatClick() {
@@ -733,11 +956,57 @@ function renderReview() {
   '</div>';
 }
 
+function renderPinSection() {
+  if (!state.hasPin) {
+    return '' +
+    '<div class="settings-section">' +
+      '<h3>App lock</h3>' +
+      '<p class="help">Requires a PIN or password to open the app \u2014 a privacy screen for a shared or unlocked phone. This doesn\u2019t encrypt your entries; it just gates the screen, so if you forget it, "Forgot PIN?" on the lock screen resets it with no data lost.</p>' +
+      '<input type="password" class="textinput" id="setup-pass1" placeholder="New PIN or password" style="margin-bottom:8px;" />' +
+      '<input type="password" class="textinput" id="setup-pass2" placeholder="Confirm" />' +
+      (state.pinSetupError ? '<p class="help" style="color:var(--red);">' + escapeHtml(state.pinSetupError) + '</p>' : '') +
+      '<div class="row" style="margin-top:10px;">' +
+        '<button class="btn btn-primary" ' + (state.pinBusy ? 'disabled' : '') + ' onclick="submitSetupPin()">' + (state.pinBusy ? 'Saving\u2026' : 'Turn on app lock') + '</button>' +
+      '</div>' +
+    '</div>';
+  }
+  var changeForm = !state.showChangePin ? '' : (
+    '<input type="password" class="textinput" id="change-pass-current" placeholder="Current PIN" style="margin:10px 0 8px;" />' +
+    '<input type="password" class="textinput" id="change-pass-new1" placeholder="New PIN or password" style="margin-bottom:8px;" />' +
+    '<input type="password" class="textinput" id="change-pass-new2" placeholder="Confirm new PIN" />' +
+    (state.changePinError ? '<p class="help" style="color:var(--red);">' + escapeHtml(state.changePinError) + '</p>' : '') +
+    '<div class="row" style="margin-top:10px;">' +
+      '<button class="btn btn-primary" ' + (state.pinBusy ? 'disabled' : '') + ' onclick="submitChangePin()">Save new PIN</button>' +
+      '<button class="btn-ghost" onclick="toggleChangePin(false)">Cancel</button>' +
+    '</div>'
+  );
+  var turnOffForm = !state.showTurnOffPin ? '' : (
+    '<input type="password" class="textinput" id="turnoff-pass" placeholder="Current PIN, to confirm" style="margin:10px 0 8px;" />' +
+    (state.turnOffPinError ? '<p class="help" style="color:var(--red);">' + escapeHtml(state.turnOffPinError) + '</p>' : '') +
+    '<div class="row">' +
+      '<button class="btn-ghost danger" ' + (state.pinBusy ? 'disabled' : '') + ' onclick="submitTurnOffPin()">Yes, turn off app lock</button>' +
+      '<button class="btn-ghost" onclick="toggleTurnOffPin(false)">Cancel</button>' +
+    '</div>'
+  );
+  return '' +
+  '<div class="settings-section">' +
+    '<h3>App lock is on</h3>' +
+    '<p class="help">Unlocked for this session \u2014 tap Lock to require your PIN again.</p>' +
+    '<div class="row">' +
+      '<button class="btn" style="background:transparent;border:1px solid rgba(30,42,56,0.3);color:var(--ink);" onclick="lockJournal()">Lock now</button>' +
+      (!state.showChangePin ? '<button class="btn-ghost" onclick="toggleChangePin(true)">Change PIN</button>' : '') +
+    '</div>' +
+    changeForm +
+    (!state.showChangePin ? (!state.showTurnOffPin ? '<div style="margin-top:14px;"><button class="btn-ghost danger" onclick="toggleTurnOffPin(true)">Turn off app lock</button></div>' : turnOffForm) : '') +
+  '</div>';
+}
+
 function renderSettings() {
   var clientId = getClientId();
   var draft = state.settingsClientIdDraft !== null ? state.settingsClientIdDraft : clientId;
   return '' +
   '<div class="panel">' +
+    renderPinSection() +
     '<div class="settings-section">' +
       '<h3>Google Drive backup</h3>' +
       '<p class="help">Your Client ID is already set. If you ever redeploy this app to a different URL, create a new one from your Google Cloud project and paste it here (see the README).</p>' +
@@ -768,18 +1037,32 @@ function renderSettings() {
 }
 
 function render() {
+  document.getElementById('header-slot').innerHTML = renderHeader();
+  var bodyEl = document.getElementById('body-slot');
+  if (state.locked) {
+    bodyEl.innerHTML = renderLockScreen();
+    return;
+  }
   var body;
   if (state.view === 'today') body = renderToday();
   else if (state.view === 'log') body = renderLog();
   else if (state.view === 'review') body = renderReview();
   else body = renderSettings();
 
-  var app = document.getElementById('app');
-  app.innerHTML = renderHeader() + body;
+  bodyEl.innerHTML = body;
+}
+
+// Updates only the header (streak/entry-no/Drive indicator). Used for status
+// pings \u2014 like a background Drive sync \u2014 that must never blow away an
+// uncontrolled text input someone is actively typing into elsewhere on the page.
+function renderHeaderOnly() {
+  document.getElementById('header-slot').innerHTML = renderHeader();
 }
 
 /* ---------------- Boot ---------------- */
 loadData();
+state.hasPin = !!localStorage.getItem(LS_PIN);
+state.locked = state.hasPin;
 render();
 
 if ('serviceWorker' in navigator) {
